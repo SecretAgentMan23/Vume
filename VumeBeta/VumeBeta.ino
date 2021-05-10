@@ -5,8 +5,8 @@
 #include <ESP8266WebServer.h>
 #include <FastLED.h>
 
-const char* ssid = "";
-const char* password = "";
+const char* ssid = " ";
+const char* password = " ";
 
 // Globals for power indicator /////////////////////
 int ON = D0; // ESP8266 Pin to which onboard LED is connected
