@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en" class="h-100">
+  <head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="Agent" content="SecretAgentMan">
+  <title>VUME: Stero VU Meter</title>
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jscolor/2.0.4/jscolor.min.js"></script>
+  </head>
+
+  <body class="container d-flex h-100 text-center text-white bg-dark">
+
+    <div class="container d-flex w-25 h-auto p-3 mx-auto flex-column">
+      <header class="mb-5">
+        <div class="h-50 mb-5">
+          <h3 class="float-md-start mb-0">VUME</h3>
+        </div>
+      </header>
+
+      <h1 class="mt-5">VUME</h1>
+      <p>Led Status: OFF</p>
+      <a href="/Power" class="h6 h-10 btn btn lg btn-secondary fw-bold border-white bg-white text-dark">ON/OFF</a>
+
+      <a href="/SetColor" class="h6 h-10 btn btn lg btn-secondary fw-bold border-white bg-white text-dark" id="change_color" role="button">Set Color</a>
+      <!-- <input type="color" class="h6 form-control form-control-lg" id="rgb" value="#563d7c" title="Choose your color"> -->
+      <input class="h6 jscolor {onFineChange:'update(this)'}" id="rgb">
+      <script>function update(picker) {document.getElementById('rgb').innerHTML = Math.round(picker.rgb[0]) + ', ' +  Math.round(picker.rgb[1]) + ', ' + Math.round(picker.rgb[2])
+      document.getElementById("change_color").href="?r" + Math.round(picker.rgb[0]) + "g" +  Math.round(picker.rgb[1]) + "b" + Math.round(picker.rgb[2]) + "&";}</script>
+
+      <a href="#" class="h6 btn btn-lg btn-secondary fw-bold border-white bg-white dropdown-toggle text-dark" id="dropdownMenuButton" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">Mode Select</a>
+      <div class="h6 h-10 dropdown-menu" aria-labelledby="dropdownMenuButton">
+        <a href="Mode/Solid" class="h6 dropdown-item">Solid</a>
+        <a href="Mode/VUMeter" class="h6 dropdown-item">VU Meter</a>
+      </div>
+    </div>
+    <script src="https://code.jquery.com/jquery-3.3.1.slim.min.js" integrity="sha384-q8i/X+965DzO0rT7abK41JStQIAqVgRVzpbzo5smXKp4YfRvH+8abtTE1Pi6jizo" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.7/umd/popper.min.js" integrity="sha384-UO2eT0CpHqdSJQ6hJty5KVphtPhzWj9WO1clHTMGa3JDZwrnQq4sF86dIHNDz0W1" crossorigin="anonymous"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/js/bootstrap.min.js" integrity="sha384-JjSmVgyd0p3pXB1rRibZUAYoIIy6OrQ6VrjIEaFf/nJGzIxFDsf4x0xIM+B07jRM" crossorigin="anonymous"></script>
+  </body>
+</html>
