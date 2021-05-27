@@ -5,8 +5,8 @@
 #include <ESP8266WebServer.h>
 #include <FastLED.h>
 
-const char* ssid = " ";
-const char* password = " ";
+const char* ssid = "";
+const char* password = "";
 
 // Globals for power indicator /////////////////////
 int ON = D0; // ESP8266 Pin to which onboard LED is connected
@@ -19,8 +19,8 @@ int ledState = LOW;  // ledState used to set the LED
 #define MAX_MA 2000
 #define COLOR_ORDER GRB
 #define LED_TYPE WS2812B
-#define D_P1 6
-#define D_P2 7
+#define D_P1 D6
+#define D_P2 D7
 
 ESP8266WebServer server(80); // global for server on port 80
 CRGB ledsL[N_PIXELS];
@@ -117,7 +117,6 @@ void loop() {
   // put your main code here, to run repeatedly:
   }
   server.handleClient();
-  
 }
 
 void onConnect() {
@@ -153,7 +152,15 @@ void onPower() {
 
 void onSetColor() {
   Serial.println("Setting color to: ");
-  Serial.println(server.args());
+  Serial.println(server.arg(1));
+  String c = server.arg(1);
+  String color = "0x" + c.substring(1);
+  Serial.println("Setting");
+  Serial.println(color);
+  for(int i=0; i<N_PIXELS; i++){
+    ledsL[i] = strtol(color.c_str(), NULL, 16);
+    ledsR[i] = strtol(color.c_str(), NULL, 16);
+  }
   server.send(200, "text/html", SendHTML(ledStatus));
 }
 
@@ -171,7 +178,6 @@ String SendHTML(uint8_t led_status){
   page += "<meta name=\"Agent\" content=\"SecretAgentMan\">";
   page += "<title>VUME: Stero VU Meter</title>";
   page += "<link rel=\"stylesheet\" href=\"https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css\" integrity=\"sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T\" crossorigin=\"anonymous\">";
-  page += "<script src=\"https://cdnjs.cloudflare.com/ajax/libs/jscolor/2.0.4/jscolor.min.js\"></script>";
   page += "</head>";
   page += "<body class=\"container d-flex h-100 text-center text-white bg-dark\">";
   page += "<div class=\"container d-flex w-25 h-auto p-3 mx-auto flex-column\">";
@@ -179,18 +185,29 @@ String SendHTML(uint8_t led_status){
   page += "<div class=\"h-50 mb-5\">";
   page += "<h3 class=\"float-md-start mb-0\">VUME</h3></div></header>";
   page += "<h1 class=\"mt-5\">VUME</h1>";
-  page += "<p>Led Status: OFF</p>";
-  page += "<a href=\"/Power\" class=\"h6 h-10 btn btn lg btn-secondary fw-bold border-white bg-white text-dark\">ON/OFF</a>";
-  page += "<a href=\"/SetColor\" class=\"h6 h-10 btn btn lg btn-secondary fw-bold border-white bg-white text-dark\" id=\"change_color\" role=\"button\">Set Color</a>";
-  page += "<input class=\"h6 jscolor {onFineChange:'update(this)'}\" id=\"rgb\">";
-  page += "<script>function update(picker) {document.getElementById('rgb').innerHTML = Math.round(picker.rgb[0]) + ', ' +  Math.round(picker.rgb[1]) + ', ' + Math.round(picker.rgb[2])";
-  page += "document.getElementById(\"change_color\").href=\"?r\" + Math.round(picker.rgb[0]) + \"g\" +  Math.round(picker.rgb[1]) + \"b\" + Math.round(picker.rgb[2]) + \"&\";}</script>";
-  page += "<a href=\"#\" class=\"h6 btn btn-lg btn-secondary fw-bold border-white bg-white dropdown-toggle text-dark\" id=\"dropdownMenuButton\" data-toggle=\"dropdown\" aria-haspopup=\"true\" aria-expanded=\"false\">Mode Select</a>";
+  page += "<p class=\"text-left\" id=\"LED_Status\" style=\"margin: 0em\">LED Status: OFF</p>";
+  page += "<p class=\"text-left\" id=\"LED_Color\" style=\"margin: 0em\">Color: </p>";
+  page += "<p class=\"text-left\" id=\"LED_Mode\">Mode: OFF</p>";
+  page += "<a href=\"#\" id=\"Power\" class=\"h6 h-10 btn btn lg btn-secondary fw-bold border-white bg-white text-dark\">ON/OFF</a>";
+  page += "<input type=\"color\" style=\"margin-top: 1em; margin-bottom: 1em\" class=\"form-control form-control-md\" id=\"rgb2\" value=\"#563d7c\" title=\"Choose your color\">";
+  page += "<a href=\"#\" class=\"h6 btn btn-lg btn-secondary fw-bold border-white bg-white dropdown-toggle text-dark\" id=\"Mode_Select\" data-toggle=\"dropdown\" aria-haspopup=\"true\" aria-expanded=\"false\">Mode Select</a>";
   page += "<div class=\"h6 h-10 dropdown-menu\" aria-labelledby=\"dropdownMenuButton\">";
-  page += "<a href=\"Mode/Solid\" class=\"h6 dropdown-item\">Solid</a>";
-  page += "<a href=\"Mode/VUMeter\" class=\"h6 dropdown-item\">VU Meter</a></div></div>";
-  page += "<script src=\"https://code.jquery.com/jquery-3.3.1.slim.min.js\" integrity=\"sha384-q8i/X+965DzO0rT7abK41JStQIAqVgRVzpbzo5smXKp4YfRvH+8abtTE1Pi6jizo\" crossorigin=\"anonymous\"></script>";
+  page += "<a href=\"#\" class=\"h6 dropdown-item\">Solid</a>";
+  page += "<a href=\"#\" class=\"h6 dropdown-item\">VU Meter</a></div>";
+  page += "<label for=\"Speed\" class=\"h6 text-left\">Speed: </label>";
+  page += "<input type=\"range\" class=\"h6\" id=\"Speed\" min=\"5\" max=\"100\" value=\"75\" step=\"5\">";
+  page += "<label for=\"Brightness\" class=\"h6 text-left\">Brightness: </label>";
+  page += "<input type=\"range\" class=\"h6\" id=\"Brightness\" min=\"0\" max=\"100\" value=\"50\" step=\"5\"></div>";
+  
+  page += "<script src=\"https://code.jquery.com/jquery-3.6.0.min.js\"></script>";
   page += "<script src=\"https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.7/umd/popper.min.js\" integrity=\"sha384-UO2eT0CpHqdSJQ6hJty5KVphtPhzWj9WO1clHTMGa3JDZwrnQq4sF86dIHNDz0W1\" crossorigin=\"anonymous\"></script>";
   page += "<script src=\"https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/js/bootstrap.min.js\" integrity=\"sha384-JjSmVgyd0p3pXB1rRibZUAYoIIy6OrQ6VrjIEaFf/nJGzIxFDsf4x0xIM+B07jRM\" crossorigin=\"anonymous\"></script></body></hmml>";
+
+  page += "<script>$(\"#Power\").click(function(){if($(\"#LED_Status\").text() == \"LED Status: OFF\"){$(\"#LED_Status\").text(\"LED Status: ON\");$(\"#LED_Mode\").text(\"Mode: Solid\");}else{$(\"#LED_Status\").text(\"LED Status: OFF\");$(\"#LED_Mode\").text(\"Mode: OFF\");}});</script>";
+  page += "<script>$(\"#Speed\").on(\"change\", function() {$(\"label:first\").text(\"Speed: \" + this.value);});</script>";
+  page += "<script>$(\"#Brightness\").on(\"change\", function() {$(\"label:last\").text(\"Brightness: \" + this.value);});</script>";
+  page += "<script>$(\"#rgb2\").on(\"change\", function(){$(\"#LED_Color\").text(\"Color: \" + this.value);$.post(\"\\SetColor\", this.value);});</script>";
+  page += "<script>$(\".dropdown-item\").click(function(){$(\"#LED_Mode\").text(\"Mode: \" + this.text);});</script></body></html>";
+  
   return page;
 }
