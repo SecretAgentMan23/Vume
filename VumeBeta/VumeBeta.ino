@@ -9,52 +9,64 @@ const char* ssid = "";
 const char* password = "";
 
 // Globals for power indicator /////////////////////
-int ON = D0; // ESP8266 Pin to which onboard LED is connected
+#define ON D0 // ESP8266 Pin to which onboard LED is connected
 unsigned long previousMillis = 0;  // will store last time LED was updated
-const long interval = 1000;  // interval at which to blink (milliseconds)
-int ledState = LOW;  // ledState used to set the LED
+const int interval = 1000;  // interval at which to blink (milliseconds)
+bool ledState = LOW;  // ledState used to set the LED
 ////////////////////////////////////////////////////
 
-#define N_PIXELS 148
-#define MAX_MA 2000
-#define COLOR_ORDER GRB
-#define LED_TYPE WS2812B
-#define D_P1 D6
-#define D_P2 D7
+#define N_PIXELS 148               // Number of LEDS
+#define MAX_MA 2000                // Max amps pulled
+#define COLOR_ORDER GRB            // Color order for the strip
+#define LED_TYPE WS2812B           // LED type
+#define D_P1 D2                    // Data out for Left
+#define D_P2 D1                    // Data out for Right
+#define DC_OFFSET 0                // Offset for dirty aux signal
+#define NOISE 20                   // Noise value to filter out
+#define SAMPLES 60                 // Length of buffer for dynamic adjustments
+#define TOP (N_PIXELS + 2)         // Top bar max height goes off sccreen a little
+#define PEAK_FALL 20               // Fall speed for top bar
+#define N_PIXELS_HALF (N_PIXELS/2)
+#define ANALOG A0                  // Analog pin for our reaings. We will have to multiplex it with nodemcu
+int LEFT_SIGNAL = D6;             // Set this pin to high to set multiplexer to LEFT, and read LEFT signal
+int RIGHT_SIGNAL = D7;            // Set this pin to high to set multiplexer to RIGHT, and read RIGHT signal
 
-ESP8266WebServer server(80); // global for server on port 80
-CRGB ledsL[N_PIXELS];
-CRGB ledsR[N_PIXELS];
-bool ledStatus = LOW;
+uint8_t volCountLeft = 0;           // Frame counter for storing past volume data
+int volLeft[SAMPLES];               // Collection of prior volume samples
+int lvlLeft = 0;                    // Current "dampened" audio level
+int minLvlAvgLeft = 0;              // For dynamic adjustment of graph low & high
+int maxLvlAvgLeft = 512;
+
+uint8_t volCountRight = 0;          // Frame counter for storing past volume data
+int volRight[SAMPLES];              // Collection of prior volume samples
+int lvlRight = 0;                   // Current "dampened" audio level
+int minLvlAvgRight = 0;             // For dynamic adjustment of graph low & high
+int maxLvlAvgRight = 512;
+
+uint8_t peakLeft, peakRight;
+static uint8_t dotCountLeft, dotCountRight;
+
+ESP8266WebServer server(80);       // global for server on port 80
+CRGB ledsL[N_PIXELS];              // Left LED strip
+CRGB ledsR[N_PIXELS];              // Right LED strip
 
 void setup() {
-  ///////////// DONT TOUCH //////////////////////////////////
+  ///////////// DONT TOUCH BELOW //////////////////////////////////
   Serial.begin(115200);
   Serial.println("Booting");
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
-  while (WiFi.waitForConnectResult() != WL_CONNECTED) {
+  WiFi.mode(WIFI_STA);                                   // Sets wifi mode to Station instead of access point
+  WiFi.begin(ssid, password);                            // Initiate wifi connection with credentials
+  while (WiFi.waitForConnectResult() != WL_CONNECTED) {  // Keep trying to connect until status is WL_CONNECTED
     Serial.println("Connection Failed! Rebooting...");
     delay(5000);
     ESP.restart();
   }
-
-  // Port defaults to 8266
-  // ArduinoOTA.setPort(8266);
-
-  // Hostname defaults to esp8266-[ChipID]
-  ArduinoOTA.setHostname("ESP8266");
-
-  // No authentication by default
-  ArduinoOTA.setPassword("ChangeMe");
-
-  // Password can be set with it's md5 value as well
-  // MD5(admin) = 21232f297a57a5a743894a0e4a801fc3
-  // ArduinoOTA.setPasswordHash("21232f297a57a5a743894a0e4a801fc3");
-  pinMode(ON, OUTPUT);
-  ArduinoOTA.onStart([]() {
+  pinMode(ON, OUTPUT);                                    // Sets the mode of the power LED to OUTPUT
+  ArduinoOTA.setHostname("ESP8266");                      // Hostname defaults to esp8266-[ChipID]
+  ArduinoOTA.setPassword("ChangeMe");                     // No authentication by default
   
-    
+  // Arduino OTA on start function
+  ArduinoOTA.onStart([]() {
     String type;
     if (ArduinoOTA.getCommand() == U_FLASH) {
       type = "sketch";
@@ -62,15 +74,18 @@ void setup() {
       type = "filesystem";
     }
 
-    // NOTE: if updating FS this would be the place to unmount FS using FS.end()
     Serial.println("Start updating " + type);
   });
+
+  // Arduino OTA on end function
   ArduinoOTA.onEnd([]() {
     Serial.println("\nEnd");
   });
+  // Arduino OTA on progress function
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
     Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
   });
+  // Arduino OTA on error function
   ArduinoOTA.onError([](ota_error_t error) {
     Serial.printf("Error[%u]: ", error);
     if (error == OTA_AUTH_ERROR) {
@@ -86,24 +101,27 @@ void setup() {
     }
   });
   ArduinoOTA.begin();
-  Serial.println("Ready");
+  Serial.println("Wifi Ready");
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
-  server.on("/", onConnect);
-  server.on("/Power", onPower);
-  server.on("/SetColor", onSetColor);
-  server.onNotFound(notFound);
+  
+  server.on("/", onConnect);                                // Binds onConnect handler to main URL
+  server.on("/Power", onPower);                             // Binds onPower handler to Power URL
+  server.on("/SetColor", onSetColor);                       // Binds onSetColor handler to set URL
+  server.onNotFound(notFound);                              // Binds notFound handler to 404 error
 
   server.begin();
   Serial.println("HTTP server started");
-  ///////////// DONT TOUCH //////////////////////////////////
-  FastLED.addLeds<LED_TYPE, D_P1>(ledsL, N_PIXELS);
-  FastLED.addLeds<LED_TYPE, D_P2>(ledsR, N_PIXELS);
+  ///////////// DONT TOUCH ABOVE //////////////////////////////////
+  
+  FastLED.addLeds<LED_TYPE, D_P1>(ledsL, N_PIXELS);         // Adds left strip to our FastLED workspace
+  FastLED.addLeds<LED_TYPE, D_P2>(ledsR, N_PIXELS);         // Adds right strip to our FastLED workspace
+
+  pinMode(ANALOG, INPUT);
   
 }
 
 void loop() {
-  ArduinoOTA.handle();
   /////////////////////// Lets us know the system is powered on! ////////////////////////
   unsigned long currentMillis = millis();
   if (currentMillis - previousMillis >= interval) {
@@ -114,62 +132,203 @@ void loop() {
   // set the LED with the ledState of the variable:
   digitalWrite(ON,  ledState);
   ///////////////////////////////////////////////////////////////////////////////////////
+  }
+  ArduinoOTA.handle();                                      // Handles all OTA calls and fucntions
+  server.handleClient();                                    // Handles all requests made from client
+
   // put your main code here, to run repeatedly:
-  }
-  server.handleClient();
+  vu5(0);
+  vu5(1);
 }
 
+// When a user connects, display connect message and serve webpage
 void onConnect() {
-  // What do we want to happen upon a user connecting to the page
-  // Set the status to low, send the webpage
-  // is there any defaults for the vu meter we need to initialize?
   Serial.println("User has connected: ");
-  ledStatus = LOW;
-  server.send(200, "text/html", SendHTML(ledStatus));
+  server.send(200, "text/html", SendHTML());
 }
 
+// When a user clicks the power button, get the 
+// current status and either turn the strip on or off
 void onPower() {
-  // When a user clicks the power button do the following
-  // If the strip is on, turn it off, if it's off turn it on
-  // update the status indicator above the power button
-
-  if(ledsL[0]){ // there is some sort of light and we want them off
-    Serial.println("VUME turning off");
-    ledStatus = LOW;
-    FastLED.clear();
+  if(ledsL[0]){                                             // there is some sort of light and we want them off
+    Serial.println("VUME turning off");                     // Print turning off message
+    FastLED.clear();                                        // Clears data channel for FastLED
   }
-  else{ // they are off already and we want to turn on
-    Serial.println("VUME turning on");
-    ledStatus = HIGH;
-    for(int i = 0; i < N_PIXELS; i++){
-      ledsL[i] = CRGB::White;
-      ledsR[i] = CRGB::White;
+  else{                                                     // they are off already and we want to turn on
+    Serial.println("VUME turning on");                      // Print turning on message
+    for(uint8_t i = 0; i < N_PIXELS; i++){                      // Loops through and sets all the LEDs for left and right to white
+      ledsL[i] = CRGB::White;                               // Left = White
+      ledsR[i] = CRGB::White;                               // Right = White
     }
   }
-  FastLED.show();
-  server.send(200, "text/html", SendHTML(ledStatus));
+  FastLED.show();                                           // Push data channel updates to show
+  server.send(200, "text/html", SendHTML());                // Sends the client the new webpage, not sure if I need to keep this with the Jquery
 }
 
+// Receives a HTTP post message containing the 
+// hex value of the color requested by the user
+// Converts it to CRGB and assigned to LEDS
 void onSetColor() {
   Serial.println("Setting color to: ");
-  Serial.println(server.arg(1));
-  String c = server.arg(1);
-  String color = "0x" + c.substring(1);
-  Serial.println("Setting");
+  String c = server.arg(1);                                 // Get the hex argument from the post message
+  String color = "0x" + c.substring(1);                     // Remove the "#" from c, and add "0x" to the head
   Serial.println(color);
-  for(int i=0; i<N_PIXELS; i++){
-    ledsL[i] = strtol(color.c_str(), NULL, 16);
-    ledsR[i] = strtol(color.c_str(), NULL, 16);
+  for(uint8_t i=0; i<N_PIXELS; i++){                            // Loops through and assigns the color to each LED
+    ledsL[i] = strtol(color.c_str(), NULL, 16);             // Turns color into direct Null terminated C-String, the casts it to int
+    ledsR[i] = strtol(color.c_str(), NULL, 16);             // Turns color into direct Null terminated C-String, the casts it to int
   }
-  server.send(200, "text/html", SendHTML(ledStatus));
+  server.send(200, "text/html", SendHTML());                // Sends the client the new webpage, not sure if I need to keep this with the JQuery
 }
 
+// Wrong URL, tell client "Error 404"
 void notFound (){
   // Webpage was not found
-  server.send(404, "text/plain", "Not found");
+  server.send(404, "text/plain", "Not found");              // Serve 404 message
 }
 
-String SendHTML(uint8_t led_status){
+uint16_t auxReading(uint8_t channel) {
+
+  Serial.print("Reading Channel: ");
+  Serial.println(channel);
+  int n = 0;
+  uint16_t height = 0;
+
+  if(channel == 0) {
+    pinMode(LEFT_SIGNAL, OUTPUT);
+    pinMode(RIGHT_SIGNAL, INPUT);
+    digitalWrite(LEFT_SIGNAL, HIGH);
+    delay(100);
+    int n = analogRead(ANALOG); // Raw reading from left line in
+    digitalWrite(LEFT_SIGNAL, LOW);
+    Serial.println(n);
+    n = abs(n - 512 - DC_OFFSET); // Center on zero
+    Serial.println(n);
+    n = (n <= NOISE) ? 0 : (n - NOISE); // Remove noise/hum
+    Serial.println(n);
+    lvlLeft = ((lvlLeft * 7) + n) >> 3; // "Dampened" reading else looks twitchy (>>3 is divide by 8)
+    volLeft[volCountLeft] = n; // Save sample for dynamic leveling
+    volCountLeft = ++volCountLeft % SAMPLES;
+    // Calculate bar height based on dynamic min/max levels (fixed point):
+    height = TOP * (lvlLeft - minLvlAvgLeft) / (long)(maxLvlAvgLeft - minLvlAvgLeft);
+    Serial.println(lvlLeft);
+  }
+  
+  else {
+    pinMode(RIGHT_SIGNAL, OUTPUT);
+    pinMode(LEFT_SIGNAL, INPUT);
+    digitalWrite(RIGHT_SIGNAL, HIGH);
+    delay(100);
+    int n = analogRead(ANALOG); // Raw reading from mic
+    digitalWrite(RIGHT_SIGNAL, LOW);
+    Serial.println(n);
+    n = abs(n - 512 - DC_OFFSET); // Center on zero
+    Serial.println(n);
+    n = (n <= NOISE) ? 0 : (n - NOISE); // Remove noise/hum
+    Serial.println(n);
+    lvlRight = ((lvlRight * 7) + n) >> 3; // "Dampened" reading (else looks twitchy)
+    volRight[volCountRight] = n; // Save sample for dynamic leveling
+    volCountRight = ++volCountRight % SAMPLES;
+    // Calculate bar height based on dynamic min/max levels (fixed point):
+    height = TOP * (lvlRight - minLvlAvgRight) / (long)(maxLvlAvgRight - minLvlAvgRight);
+    Serial.println(lvlRight);
+  }
+
+  // Calculate bar height based on dynamic min/max levels (fixed point):
+  height = constrain(height, 0, TOP);
+  return height;
+}
+
+void averageReadings(uint8_t channel) {
+
+  uint16_t minLvl, maxLvl;
+
+  // minLvl and maxLvl indicate the volume range over prior frames, used
+  // for vertically scaling the output graph (so it looks interesting
+  // regardless of volume level).  If they're too close together though
+  // (e.g. at very low volume levels) the graph becomes super coarse
+  // and 'jumpy'...so keep some minimum distance between them (this
+  // also lets the graph go to zero when no sound is playing):
+  if(channel == 0) {
+    minLvl = maxLvl = volLeft[0];
+    for (int i = 1; i < SAMPLES; i++) {
+      if (volLeft[i] < minLvl) minLvl = volLeft[i];
+      else if (volLeft[i] > maxLvl) maxLvl = volLeft[i];
+    }
+    if ((maxLvl - minLvl) < TOP) maxLvl = minLvl + TOP;
+    
+    minLvlAvgLeft = (minLvlAvgLeft * 63 + minLvl) >> 6; // Dampen min/max levels
+    maxLvlAvgLeft = (maxLvlAvgLeft * 63 + maxLvl) >> 6; // (fake rolling average)
+  }
+
+  else {
+    minLvl = maxLvl = volRight[0];
+    for (int i = 1; i < SAMPLES; i++) {
+      if (volRight[i] < minLvl) minLvl = volRight[i];
+      else if (volRight[i] > maxLvl) maxLvl = volRight[i];
+    }
+    if ((maxLvl - minLvl) < TOP) maxLvl = minLvl + TOP;
+    minLvlAvgRight = (minLvlAvgRight * 63 + minLvl) >> 6; // Dampen min/max levels
+    maxLvlAvgRight = (maxLvlAvgRight * 63 + maxLvl) >> 6; // (fake rolling average)
+  }
+}
+
+
+void dropPeak(uint8_t channel) {
+ 
+  if(channel == 0) {
+    if(++dotCountLeft >= PEAK_FALL) { //fall rate 
+      if(peakLeft > 0) peakLeft--;
+      dotCountLeft = 0;
+    }
+  } else {
+    if(++dotCountRight >= PEAK_FALL) { //fall rate 
+      if(peakRight > 0) peakRight--;
+      dotCountRight = 0;
+    }
+  }
+}
+
+void vu5(uint8_t channel) {
+
+  CRGB* leds;
+  uint8_t i = 0;
+  uint8_t *peak;      // Pointer variable declaration
+  uint16_t height = auxReading(channel);
+
+  if(channel == 0) {
+    leds = ledsL;    // Store address of peakLeft in peak, then use *peak to
+    peak = &peakLeft;   // access the value of that address
+  }
+  else {
+    leds = ledsR;
+    peak = &peakRight;
+  }
+
+  if (height > *peak)
+    *peak = height; // Keep 'peak' dot at top
+
+    // Color pixels based on old school green/red vu
+    for (uint8_t i = 0; i < N_PIXELS; i++) {
+      if (i >= height) leds[i] = CRGB::Black;
+      else if (i > N_PIXELS - (N_PIXELS / 3)) leds[i] = CRGB::Red;
+      else leds[i] = CRGB::Red;
+    }
+  
+    // Draw peak dot
+    if (*peak > 0 && *peak <= N_PIXELS - 1){
+      if (*peak > N_PIXELS - (N_PIXELS / 3)) leds[*peak] = CRGB::Red;
+      else leds[*peak] = CRGB::Red;
+    }
+  
+  dropPeak(channel);
+
+  averageReadings(channel);
+
+  FastLED.show();
+}
+
+// Delivers our webpage to the client
+String SendHTML(){
   String page = "<!doctype html>";
   page += "<html lang=\"en\" class=\"h-100\">";
   page += "<head>";
