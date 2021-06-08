@@ -5,6 +5,21 @@
 #include <ESP8266WebServer.h>
 #include <FastLED.h>
 
+/*
+ * Gradient palette "bhw1_28_gp", originally from
+ * http://soliton.vm.bytemark.co.uk/pub/cpt-city/bhw/bhw1/tn/bhw1_28.png.index.html
+ * Size: 32 bytes of program space.
+*/
+DEFINE_GRADIENT_PALETTE( bhw1_28_gp ) {
+    0,  75,  1,221,
+   30, 252, 73,255,
+   48, 169,  0,242,
+  119,   0,149,242,
+  170,  43,  0,242,
+  206, 252, 73,255,
+  232,  78, 12,214,
+  255,   0,149,242};
+
 const char* ssid = "";
 const char* password = "";
 
@@ -15,41 +30,54 @@ const int interval = 1000;  // interval at which to blink (milliseconds)
 bool ledState = LOW;  // ledState used to set the LED
 ////////////////////////////////////////////////////
 
-#define N_PIXELS 148               // Number of LEDS
-#define MAX_MA 2000                // Max amps pulled
-#define COLOR_ORDER GRB            // Color order for the strip
-#define LED_TYPE WS2812B           // LED type
-#define D_P1 D2                    // Data out for Left
-#define D_P2 D1                    // Data out for Right
-#define DC_OFFSET 0                // Offset for dirty aux signal
-#define NOISE 20                   // Noise value to filter out
-#define SAMPLES 60                 // Length of buffer for dynamic adjustments
-#define TOP (N_PIXELS + 2)         // Top bar max height goes off sccreen a little
-#define PEAK_FALL 20               // Fall speed for top bar
+#define N_PIXELS 148                            // Number of LEDS
+#define MAX_MA 2000                             // Max amps pulled
+#define COLOR_ORDER GRB                         // Color order for the strip
+#define LED_TYPE WS2812B                        // LED type
+#define D_P1 D2                                 // Data out for Left
+#define D_P2 D1                                 // Data out for Right
+#define DC_OFFSET 0                             // Offset for dirty aux signal
+#define NOISE 20                                // Noise value to filter out
+#define SAMPLES 60                              // Length of buffer for dynamic adjustments
+#define TOP (N_PIXELS + 2)                      // Top bar max height goes off sccreen a little
+#define PEAK_FALL 20                            // Fall speed for top bar
 #define N_PIXELS_HALF (N_PIXELS/2)
-#define ANALOG A0                  // Analog pin for our reaings. We will have to multiplex it with nodemcu
-int LEFT_SIGNAL = D6;             // Set this pin to high to set multiplexer to LEFT, and read LEFT signal
-int RIGHT_SIGNAL = D7;            // Set this pin to high to set multiplexer to RIGHT, and read RIGHT signal
+#define ANALOG A0                               // Analog pin for our reaings. We will have to multiplex it with nodemcu
+#define LEFT_SIGNAL D6                          // Set this pin to high to set multiplexer to LEFT, and read LEFT signal
+#define RIGHT_SIGNAL D7                         // Set this pin to high to set multiplexer to RIGHT, and read RIGHT signal
 
-uint8_t volCountLeft = 0;           // Frame counter for storing past volume data
-int volLeft[SAMPLES];               // Collection of prior volume samples
-int lvlLeft = 0;                    // Current "dampened" audio level
-int minLvlAvgLeft = 0;              // For dynamic adjustment of graph low & high
-int maxLvlAvgLeft = 512;
+int transitionTime = 0;
 
-uint8_t volCountRight = 0;          // Frame counter for storing past volume data
-int volRight[SAMPLES];              // Collection of prior volume samples
-int lvlRight = 0;                   // Current "dampened" audio level
-int minLvlAvgRight = 0;             // For dynamic adjustment of graph low & high
-int maxLvlAvgRight = 512;
+// GLOBALS FOR VU METER
+int lvlLeft, lvlRight = 0;                      // Current "dampened" audio level
+uint8_t peakLeft, peakRight;                    // Peak Levels
+static uint8_t dotCountLeft, dotCountRight;     // idk tbh
 
-uint8_t peakLeft, peakRight;
-static uint8_t dotCountLeft, dotCountRight;
+// GLOBALS FOR RAINBOW ANIMATION
+uint8_t thishue = 0;                                  
+uint8_t deltahue = 10;
 
-ESP8266WebServer server(80);       // global for server on port 80
-CRGB ledsL[N_PIXELS];              // Left LED strip
-CRGB ledsR[N_PIXELS];              // Right LED strip
+// GLOBALS FOR CANDYCANE ANIMATION
+CRGBPalette16 currentPalettestriped; 
 
+// GLOABLS FOR NOISE ANIMATION
+static uint16_t dist;                            // A random number for our noise generator.
+uint16_t scale = 60;                             // Wouldn't recommend changing this on the fly, or the animation will be really blocky.
+uint8_t maxChanges = 48;                         // Value for blending between palettes.
+CRGBPalette16 targetPalette(bhw1_28_gp);         // Palette we are blending towards
+CRGBPalette16 currentPalette(CRGB::Black);       // Our empty black palette
+
+String Pattern = "CandyCane";                          // Our mode control
+
+ESP8266WebServer server(80);                     // global for server on port 80
+CRGB ledsL[N_PIXELS];                            // Left LED strip
+CRGB ledsR[N_PIXELS];                            // Right LED strip
+
+
+/*
+ * Function that runs at startup. Connects wifi, initializes server, 
+ * creates LED strips, initializes OTA, defines our pin modes
+ */
 void setup() {
   ///////////// DONT TOUCH BELOW //////////////////////////////////
   Serial.begin(115200);
@@ -64,7 +92,7 @@ void setup() {
   pinMode(ON, OUTPUT);                                    // Sets the mode of the power LED to OUTPUT
   ArduinoOTA.setHostname("ESP8266");                      // Hostname defaults to esp8266-[ChipID]
   ArduinoOTA.setPassword("ChangeMe");                     // No authentication by default
-  
+
   // Arduino OTA on start function
   ArduinoOTA.onStart([]() {
     String type;
@@ -104,7 +132,7 @@ void setup() {
   Serial.println("Wifi Ready");
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
-  
+
   server.on("/", onConnect);                                // Binds onConnect handler to main URL
   server.on("/Power", onPower);                             // Binds onPower handler to Power URL
   server.on("/SetColor", onSetColor);                       // Binds onSetColor handler to set URL
@@ -113,14 +141,19 @@ void setup() {
   server.begin();
   Serial.println("HTTP server started");
   ///////////// DONT TOUCH ABOVE //////////////////////////////////
-  
-  FastLED.addLeds<LED_TYPE, D_P1>(ledsL, N_PIXELS);         // Adds left strip to our FastLED workspace
-  FastLED.addLeds<LED_TYPE, D_P2>(ledsR, N_PIXELS);         // Adds right strip to our FastLED workspace
+
+  FastLED.addLeds<LED_TYPE, D_P1, COLOR_ORDER>(ledsL, N_PIXELS);         // Adds left strip to our FastLED workspace
+  FastLED.addLeds<LED_TYPE, D_P2, COLOR_ORDER>(ledsR, N_PIXELS);         // Adds right strip to our FastLED workspace
+
+  setupStripedPalette( CRGB::Red, CRGB::Red, CRGB::White, CRGB::White);
 
   pinMode(ANALOG, INPUT);
-  
 }
-
+/*
+ * Loop function, essentially main but looped. First few lines simply flash pin D0
+ * letting us know the board turned on and connected to wifi. Then we check pattern for
+ * for the current mode and run the animation, or do nothing if solid.
+ */
 void loop() {
   /////////////////////// Lets us know the system is powered on! ////////////////////////
   unsigned long currentMillis = millis();
@@ -137,53 +170,127 @@ void loop() {
   server.handleClient();                                    // Handles all requests made from client
 
   // put your main code here, to run repeatedly:
-  vu5(0);
-  vu5(1);
+  if(Pattern == "Rainbow"){
+    //static uint8_t starthue = 0;
+    thishue++;
+    fill_rainbow(ledsL, N_PIXELS, thishue, deltahue);
+    fill_rainbow(ledsR, N_PIXELS, thishue, deltahue);
+    if (transitionTime == 0 or transitionTime == NULL) {
+      transitionTime = 130;
+    }
+    showleds();  
+  }
+  if(Pattern == "CandyCane"){
+    static uint8_t startIndex = 0;
+    startIndex = startIndex + 1; 
+    fill_palette( ledsL, N_PIXELS, startIndex, 16, currentPalettestriped, 255, LINEARBLEND);
+    fill_palette( ledsR, N_PIXELS, startIndex, 16, currentPalettestriped, 255, LINEARBLEND);
+    if (transitionTime == 0 or transitionTime == NULL) {
+      transitionTime = 0;
+    }
+    showleds();
+  }
+
+  EVERY_N_MILLISECONDS(10){
+    
+    nblendPaletteTowardPalette(currentPalette, targetPalette, maxChanges);
+    
+    if(Pattern == "Noise"){
+      for (int i = 0; i < N_PIXELS; i++) {                                     // Just onE loop to fill up the LED array as all of the pixels change.
+        uint8_t index = inoise8(i * scale, dist + i * scale) % 255;            // Get a value from the noise function. I'm using both x and y axis.
+        ledsL[i] = ColorFromPalette(currentPalette, index, 255, LINEARBLEND);   // With that value, look up the 8 bit colour palette value and assign it to the current LED.
+        ledsR[i] = ColorFromPalette(currentPalette, index, 255, LINEARBLEND);
+      }
+      dist += beatsin8(10, 1, 4);                                              // Moving along the distance (that random number we started out with). Vary it a bit with a sine wave.
+      if (transitionTime == 0 or transitionTime == NULL) {
+        transitionTime = 0;
+      }
+      showleds();
+    }
+  }
+  
 }
 
-// When a user connects, display connect message and serve webpage
+/*
+ * When a user connects, display connect message and serve webpage
+ */
 void onConnect() {
   Serial.println("User has connected: ");
   server.send(200, "text/html", SendHTML());
 }
 
-// When a user clicks the power button, get the 
-// current status and either turn the strip on or off
+/* 
+ * When a user clicks the power button, get the current status and either turn the strip on or off 
+ */
 void onPower() {
   if(ledsL[0]){                                             // there is some sort of light and we want them off
     Serial.println("VUME turning off");                     // Print turning off message
+    setPattern("Off");
     FastLED.clear();                                        // Clears data channel for FastLED
   }
   else{                                                     // they are off already and we want to turn on
     Serial.println("VUME turning on");                      // Print turning on message
-    for(uint8_t i = 0; i < N_PIXELS; i++){                      // Loops through and sets all the LEDs for left and right to white
-      ledsL[i] = CRGB::White;                               // Left = White
-      ledsR[i] = CRGB::White;                               // Right = White
-    }
+    setStripColor(CRGB::White);
+    setPattern("Solid");
   }
-  FastLED.show();                                           // Push data channel updates to show
   server.send(200, "text/html", SendHTML());                // Sends the client the new webpage, not sure if I need to keep this with the Jquery
 }
 
-// Receives a HTTP post message containing the 
-// hex value of the color requested by the user
-// Converts it to CRGB and assigned to LEDS
+/*
+ * Receives a HTTP post message containing the hex value of the color requested by the user 
+ * Converts it to CRGB and calls setStripColor, and setPattern
+ */
 void onSetColor() {
   Serial.println("Setting color to: ");
-  String c = server.arg(1);                                 // Get the hex argument from the post message
-  String color = "0x" + c.substring(1);                     // Remove the "#" from c, and add "0x" to the head
-  Serial.println(color);
-  for(uint8_t i=0; i<N_PIXELS; i++){                            // Loops through and assigns the color to each LED
-    ledsL[i] = strtol(color.c_str(), NULL, 16);             // Turns color into direct Null terminated C-String, the casts it to int
-    ledsR[i] = strtol(color.c_str(), NULL, 16);             // Turns color into direct Null terminated C-String, the casts it to int
-  }
+  String Value = "0x" + server.arg(1).substring(1);           // Get the hex argument from the post message
+  CRGB color = strtol(Value.c_str(), NULL,16);
+  setStripColor(color);
+  setPattern("Solid");
   server.send(200, "text/html", SendHTML());                // Sends the client the new webpage, not sure if I need to keep this with the JQuery
 }
 
-// Wrong URL, tell client "Error 404"
+/*
+ * Wrong URL, tell client "Error 404"
+ */
 void notFound (){
-  // Webpage was not found
   server.send(404, "text/plain", "Not found");              // Serve 404 message
+}
+
+/*
+ * Loops through and sets both strips to the same color
+ */
+void setStripColor(CRGB color){
+  for (uint8_t i =0; i < N_PIXELS; i++){
+    ledsL[i] = color;
+    ledsR[i] = color;
+  }
+  FastLED.show();
+}
+
+/*
+ * The current state of the strip i.e. solid, rainbow, off
+ */
+void setPattern(String p){
+  Pattern = p;
+}
+
+void setupStripedPalette( CRGB A, CRGB AB, CRGB B, CRGB BA) {
+  currentPalettestriped = CRGBPalette16(A, A, A, A, A, A, A, A, B, B, B, B, B, B, B, B);
+}
+
+/*
+ * Function for displaying our LED's at our determined speed
+ */
+void showleds() {
+  delay(1);
+  bool stateOn = true;
+  if (stateOn) {
+    FastLED.setBrightness(255);  //EXECUTE EFFECT COLOR
+    FastLED.show();
+    if (transitionTime > 0 && transitionTime < 130) {  //Sets animation speed based on receieved value
+      FastLED.delay(1000 / transitionTime);
+    }
+  }
 }
 
 uint16_t auxReading(uint8_t channel) {
@@ -194,94 +301,53 @@ uint16_t auxReading(uint8_t channel) {
   uint16_t height = 0;
 
   if(channel == 0) {
-    pinMode(LEFT_SIGNAL, OUTPUT);
     pinMode(RIGHT_SIGNAL, INPUT);
-    digitalWrite(LEFT_SIGNAL, HIGH);
-    delay(100);
-    int n = analogRead(ANALOG); // Raw reading from left line in
+    pinMode(LEFT_SIGNAL, OUTPUT);
     digitalWrite(LEFT_SIGNAL, LOW);
+    int n = analogRead(ANALOG); // Raw reading from left line in
     Serial.println(n);
-    n = abs(n - 512 - DC_OFFSET); // Center on zero
-    Serial.println(n);
-    n = (n <= NOISE) ? 0 : (n - NOISE); // Remove noise/hum
-    Serial.println(n);
-    lvlLeft = ((lvlLeft * 7) + n) >> 3; // "Dampened" reading else looks twitchy (>>3 is divide by 8)
-    volLeft[volCountLeft] = n; // Save sample for dynamic leveling
-    volCountLeft = ++volCountLeft % SAMPLES;
-    // Calculate bar height based on dynamic min/max levels (fixed point):
-    height = TOP * (lvlLeft - minLvlAvgLeft) / (long)(maxLvlAvgLeft - minLvlAvgLeft);
-    Serial.println(lvlLeft);
-  }
-  
-  else {
-    pinMode(RIGHT_SIGNAL, OUTPUT);
-    pinMode(LEFT_SIGNAL, INPUT);
-    digitalWrite(RIGHT_SIGNAL, HIGH);
     delay(100);
-    int n = analogRead(ANALOG); // Raw reading from mic
-    digitalWrite(RIGHT_SIGNAL, LOW);
-    Serial.println(n);
+    /*
     n = abs(n - 512 - DC_OFFSET); // Center on zero
-    Serial.println(n);
     n = (n <= NOISE) ? 0 : (n - NOISE); // Remove noise/hum
-    Serial.println(n);
-    lvlRight = ((lvlRight * 7) + n) >> 3; // "Dampened" reading (else looks twitchy)
-    volRight[volCountRight] = n; // Save sample for dynamic leveling
-    volCountRight = ++volCountRight % SAMPLES;
+    lvlLeft = ((lvlLeft * 7) + n) >> 3; // "Dampened" reading else looks twitchy (>>3 is divide by 8)
+    */
     // Calculate bar height based on dynamic min/max levels (fixed point):
-    height = TOP * (lvlRight - minLvlAvgRight) / (long)(maxLvlAvgRight - minLvlAvgRight);
-    Serial.println(lvlRight);
+    // height = TOP * (lvlLeft - minLvlAvgLeft) / (long)(maxLvlAvgLeft - minLvlAvgLeft);
+    height = map(n, 0, 400, 0, 150);
+  }
+
+  else {
+    pinMode(LEFT_SIGNAL, INPUT);
+    pinMode(RIGHT_SIGNAL, OUTPUT);
+    digitalWrite(RIGHT_SIGNAL, LOW);
+    int n = analogRead(ANALOG); // Raw reading from mic
+    Serial.println(n);
+    delay(100);
+    /*
+    n = abs(n - 512 - DC_OFFSET); // Center on zero
+    n = (n <= NOISE) ? 0 : (n - NOISE); // Remove noise/hum
+    lvlRight = ((lvlRight * 7) + n) >> 3; // "Dampened" reading (else looks twitchy)
+    */
+    // Calculate bar height based on dynamic min/max levels (fixed point):
+    // height = TOP * (lvlRight - minLvlAvgRight) / (long)(maxLvlAvgRight - minLvlAvgRight);
+    height = map(n, 0, 400, 0, 150);
   }
 
   // Calculate bar height based on dynamic min/max levels (fixed point):
-  height = constrain(height, 0, TOP);
+  //height = constrain(height, 0, TOP);
   return height;
 }
 
-void averageReadings(uint8_t channel) {
-
-  uint16_t minLvl, maxLvl;
-
-  // minLvl and maxLvl indicate the volume range over prior frames, used
-  // for vertically scaling the output graph (so it looks interesting
-  // regardless of volume level).  If they're too close together though
-  // (e.g. at very low volume levels) the graph becomes super coarse
-  // and 'jumpy'...so keep some minimum distance between them (this
-  // also lets the graph go to zero when no sound is playing):
-  if(channel == 0) {
-    minLvl = maxLvl = volLeft[0];
-    for (int i = 1; i < SAMPLES; i++) {
-      if (volLeft[i] < minLvl) minLvl = volLeft[i];
-      else if (volLeft[i] > maxLvl) maxLvl = volLeft[i];
-    }
-    if ((maxLvl - minLvl) < TOP) maxLvl = minLvl + TOP;
-    
-    minLvlAvgLeft = (minLvlAvgLeft * 63 + minLvl) >> 6; // Dampen min/max levels
-    maxLvlAvgLeft = (maxLvlAvgLeft * 63 + maxLvl) >> 6; // (fake rolling average)
-  }
-
-  else {
-    minLvl = maxLvl = volRight[0];
-    for (int i = 1; i < SAMPLES; i++) {
-      if (volRight[i] < minLvl) minLvl = volRight[i];
-      else if (volRight[i] > maxLvl) maxLvl = volRight[i];
-    }
-    if ((maxLvl - minLvl) < TOP) maxLvl = minLvl + TOP;
-    minLvlAvgRight = (minLvlAvgRight * 63 + minLvl) >> 6; // Dampen min/max levels
-    maxLvlAvgRight = (maxLvlAvgRight * 63 + maxLvl) >> 6; // (fake rolling average)
-  }
-}
-
-
 void dropPeak(uint8_t channel) {
- 
+
   if(channel == 0) {
-    if(++dotCountLeft >= PEAK_FALL) { //fall rate 
+    if(++dotCountLeft >= PEAK_FALL) { //fall rate
       if(peakLeft > 0) peakLeft--;
       dotCountLeft = 0;
     }
   } else {
-    if(++dotCountRight >= PEAK_FALL) { //fall rate 
+    if(++dotCountRight >= PEAK_FALL) { //fall rate
       if(peakRight > 0) peakRight--;
       dotCountRight = 0;
     }
@@ -291,9 +357,11 @@ void dropPeak(uint8_t channel) {
 void vu5(uint8_t channel) {
 
   CRGB* leds;
-  uint8_t i = 0;
   uint8_t *peak;      // Pointer variable declaration
   uint16_t height = auxReading(channel);
+  Serial.println("Setting Height for channel: ");
+  Serial.println(height);
+  Serial.println(channel);
 
   if(channel == 0) {
     leds = ledsL;    // Store address of peakLeft in peak, then use *peak to
@@ -310,24 +378,22 @@ void vu5(uint8_t channel) {
     // Color pixels based on old school green/red vu
     for (uint8_t i = 0; i < N_PIXELS; i++) {
       if (i >= height) leds[i] = CRGB::Black;
-      else if (i > N_PIXELS - (N_PIXELS / 3)) leds[i] = CRGB::Red;
       else leds[i] = CRGB::Red;
     }
-  
+
     // Draw peak dot
     if (*peak > 0 && *peak <= N_PIXELS - 1){
-      if (*peak > N_PIXELS - (N_PIXELS / 3)) leds[*peak] = CRGB::Red;
-      else leds[*peak] = CRGB::Red;
+      leds[*peak] = CRGB::Red;
     }
-  
-  dropPeak(channel);
 
-  averageReadings(channel);
+  dropPeak(channel);
 
   FastLED.show();
 }
 
-// Delivers our webpage to the client
+/*
+ * Delivers our WebUI to the client
+ */
 String SendHTML(){
   String page = "<!doctype html>";
   page += "<html lang=\"en\" class=\"h-100\">";
@@ -357,7 +423,7 @@ String SendHTML(){
   page += "<input type=\"range\" class=\"h6\" id=\"Speed\" min=\"5\" max=\"100\" value=\"75\" step=\"5\">";
   page += "<label for=\"Brightness\" class=\"h6 text-left\">Brightness: </label>";
   page += "<input type=\"range\" class=\"h6\" id=\"Brightness\" min=\"0\" max=\"100\" value=\"50\" step=\"5\"></div>";
-  
+
   page += "<script src=\"https://code.jquery.com/jquery-3.6.0.min.js\"></script>";
   page += "<script src=\"https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.7/umd/popper.min.js\" integrity=\"sha384-UO2eT0CpHqdSJQ6hJty5KVphtPhzWj9WO1clHTMGa3JDZwrnQq4sF86dIHNDz0W1\" crossorigin=\"anonymous\"></script>";
   page += "<script src=\"https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/js/bootstrap.min.js\" integrity=\"sha384-JjSmVgyd0p3pXB1rRibZUAYoIIy6OrQ6VrjIEaFf/nJGzIxFDsf4x0xIM+B07jRM\" crossorigin=\"anonymous\"></script></body></hmml>";
@@ -367,6 +433,6 @@ String SendHTML(){
   page += "<script>$(\"#Brightness\").on(\"change\", function() {$(\"label:last\").text(\"Brightness: \" + this.value);});</script>";
   page += "<script>$(\"#rgb2\").on(\"change\", function(){$(\"#LED_Color\").text(\"Color: \" + this.value);$.post(\"\\SetColor\", this.value);});</script>";
   page += "<script>$(\".dropdown-item\").click(function(){$(\"#LED_Mode\").text(\"Mode: \" + this.text);});</script></body></html>";
-  
+
   return page;
 }
