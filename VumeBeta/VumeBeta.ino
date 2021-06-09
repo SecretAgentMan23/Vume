@@ -46,7 +46,11 @@ bool ledState = LOW;  // ledState used to set the LED
 #define LEFT_SIGNAL D6                          // Set this pin to high to set multiplexer to LEFT, and read LEFT signal
 #define RIGHT_SIGNAL D7                         // Set this pin to high to set multiplexer to RIGHT, and read RIGHT signal
 
-int transitionTime = 0;
+bool Power = false;
+uint8_t animationSpeed = 0;
+uint8_t Brightness = 0;
+CRGB currentColor; 
+String currentEffect = "Solid";                   // Our mode control
 
 // GLOBALS FOR VU METER
 int lvlLeft, lvlRight = 0;                      // Current "dampened" audio level
@@ -66,8 +70,6 @@ uint16_t scale = 60;                             // Wouldn't recommend changing 
 uint8_t maxChanges = 48;                         // Value for blending between palettes.
 CRGBPalette16 targetPalette(bhw1_28_gp);         // Palette we are blending towards
 CRGBPalette16 currentPalette(CRGB::Black);       // Our empty black palette
-
-String Pattern = "CandyCane";                          // Our mode control
 
 ESP8266WebServer server(80);                     // global for server on port 80
 CRGB ledsL[N_PIXELS];                            // Left LED strip
@@ -136,6 +138,7 @@ void setup() {
   server.on("/", onConnect);                                // Binds onConnect handler to main URL
   server.on("/Power", onPower);                             // Binds onPower handler to Power URL
   server.on("/SetColor", onSetColor);                       // Binds onSetColor handler to set URL
+  server.on("/SetMode", onSetMode);
   server.onNotFound(notFound);                              // Binds notFound handler to 404 error
 
   server.begin();
@@ -170,45 +173,47 @@ void loop() {
   server.handleClient();                                    // Handles all requests made from client
 
   // put your main code here, to run repeatedly:
-  if(Pattern == "Rainbow"){
-    //static uint8_t starthue = 0;
-    thishue++;
-    fill_rainbow(ledsL, N_PIXELS, thishue, deltahue);
-    fill_rainbow(ledsR, N_PIXELS, thishue, deltahue);
-    if (transitionTime == 0 or transitionTime == NULL) {
-      transitionTime = 130;
-    }
-    showleds();  
-  }
-  if(Pattern == "CandyCane"){
-    static uint8_t startIndex = 0;
-    startIndex = startIndex + 1; 
-    fill_palette( ledsL, N_PIXELS, startIndex, 16, currentPalettestriped, 255, LINEARBLEND);
-    fill_palette( ledsR, N_PIXELS, startIndex, 16, currentPalettestriped, 255, LINEARBLEND);
-    if (transitionTime == 0 or transitionTime == NULL) {
-      transitionTime = 0;
-    }
-    showleds();
-  }
-
-  EVERY_N_MILLISECONDS(10){
+  if(Power){
     
-    nblendPaletteTowardPalette(currentPalette, targetPalette, maxChanges);
-    
-    if(Pattern == "Noise"){
-      for (int i = 0; i < N_PIXELS; i++) {                                     // Just onE loop to fill up the LED array as all of the pixels change.
-        uint8_t index = inoise8(i * scale, dist + i * scale) % 255;            // Get a value from the noise function. I'm using both x and y axis.
-        ledsL[i] = ColorFromPalette(currentPalette, index, 255, LINEARBLEND);   // With that value, look up the 8 bit colour palette value and assign it to the current LED.
-        ledsR[i] = ColorFromPalette(currentPalette, index, 255, LINEARBLEND);
+    if(currentEffect == "Rainbow"){
+      thishue++;
+      fill_rainbow(ledsL, N_PIXELS, thishue, deltahue);
+      fill_rainbow(ledsR, N_PIXELS, thishue, deltahue);
+      if (animationSpeed == 0 or animationSpeed == NULL) {
+        animationSpeed = 130;
       }
-      dist += beatsin8(10, 1, 4);                                              // Moving along the distance (that random number we started out with). Vary it a bit with a sine wave.
-      if (transitionTime == 0 or transitionTime == NULL) {
-        transitionTime = 0;
+      showleds();  
+    }
+    
+    if(currentEffect == "CandyCane"){
+      static uint8_t startIndex = 0;
+      startIndex = startIndex + 1; 
+      fill_palette( ledsL, N_PIXELS, startIndex, 16, currentPalettestriped, 255, LINEARBLEND);
+      fill_palette( ledsR, N_PIXELS, startIndex, 16, currentPalettestriped, 255, LINEARBLEND);
+      if (animationSpeed == 0 or animationSpeed == NULL) {
+        animationSpeed = 0;
       }
       showleds();
     }
+
+    EVERY_N_MILLISECONDS(10){
+    
+      nblendPaletteTowardPalette(currentPalette, targetPalette, maxChanges);
+    
+      if(currentEffect == "Noise"){
+        for (int i = 0; i < N_PIXELS; i++) {                                     // Just onE loop to fill up the LED array as all of the pixels change.
+          uint8_t index = inoise8(i * scale, dist + i * scale) % 255;            // Get a value from the noise function. I'm using both x and y axis.
+          ledsL[i] = ColorFromPalette(currentPalette, index, 255, LINEARBLEND);   // With that value, look up the 8 bit colour palette value and assign it to the current LED.
+          ledsR[i] = ColorFromPalette(currentPalette, index, 255, LINEARBLEND);
+        }
+        dist += beatsin8(10, 1, 4);                                              // Moving along the distance (that random number we started out with). Vary it a bit with a sine wave.
+        if (animationSpeed == 0 or animationSpeed == NULL) {
+          animationSpeed = 0;
+        }
+        showleds();
+      }
+    }  
   }
-  
 }
 
 /*
@@ -223,15 +228,25 @@ void onConnect() {
  * When a user clicks the power button, get the current status and either turn the strip on or off 
  */
 void onPower() {
-  if(ledsL[0]){                                             // there is some sort of light and we want them off
-    Serial.println("VUME turning off");                     // Print turning off message
-    setPattern("Off");
-    FastLED.clear();                                        // Clears data channel for FastLED
+  if(server.arg("Status") == "ON"){
+    Serial.println("VUME turning on");
+    Power = true;
+    Brightness = server.arg("Brightness").toInt();
+    animationSpeed = server.arg("Speed").toInt();
+    Serial.print("Brightness: "); Serial.println(Brightness);
+    Serial.print("Speed: "); Serial.println(animationSpeed);
+    
+    if(currentEffect == "Solid"){
+      Serial.println("pointer check passed");
+      setStripColor(CRGB::White);
+    }
+    
   }
-  else{                                                     // they are off already and we want to turn on
-    Serial.println("VUME turning on");                      // Print turning on message
-    setStripColor(CRGB::White);
-    setPattern("Solid");
+  else{
+    Serial.println("VUME turning off");
+    Power = false;
+    FastLED.clear();
+    FastLED.show();
   }
   server.send(200, "text/html", SendHTML());                // Sends the client the new webpage, not sure if I need to keep this with the Jquery
 }
@@ -241,12 +256,29 @@ void onPower() {
  * Converts it to CRGB and calls setStripColor, and setPattern
  */
 void onSetColor() {
+  String Value = "0x" + server.arg("Color").substring(1);           // Get the hex argument from the post message
+  currentColor = strtol(Value.c_str(), NULL,16);
+  Brightness = server.arg("Brightness").toInt();
+  Power = true;
   Serial.println("Setting color to: ");
-  String Value = "0x" + server.arg(1).substring(1);           // Get the hex argument from the post message
-  CRGB color = strtol(Value.c_str(), NULL,16);
-  setStripColor(color);
-  setPattern("Solid");
+  Serial.println(Value);
+  Serial.println(Brightness);
+  setStripColor(currentColor);
+  currentEffect = "Solid";
+  Serial.println(currentEffect);
   server.send(200, "text/html", SendHTML());                // Sends the client the new webpage, not sure if I need to keep this with the JQuery
+}
+
+void onSetMode(){
+  Serial.println("Setting Mode");
+  Power = true;
+  Brightness = server.arg("Brightness").toInt();
+  animationSpeed = server.arg("Speed").toInt();
+  currentEffect = server.arg("Mode");
+  Brightness = server.arg("Brightness").toInt();
+  animationSpeed = server.arg("Speed").toInt();
+  Serial.println(currentEffect);
+  server.send(200, "text/html", SendHTML());
 }
 
 /*
@@ -270,8 +302,8 @@ void setStripColor(CRGB color){
 /*
  * The current state of the strip i.e. solid, rainbow, off
  */
-void setPattern(String p){
-  Pattern = p;
+void setEffect(char *newEffect){
+  currentEffect = newEffect;
 }
 
 void setupStripedPalette( CRGB A, CRGB AB, CRGB B, CRGB BA) {
@@ -283,12 +315,11 @@ void setupStripedPalette( CRGB A, CRGB AB, CRGB B, CRGB BA) {
  */
 void showleds() {
   delay(1);
-  bool stateOn = true;
-  if (stateOn) {
-    FastLED.setBrightness(255);  //EXECUTE EFFECT COLOR
+  if (Power) {
+    FastLED.setBrightness(Brightness);  //EXECUTE EFFECT COLOR
     FastLED.show();
-    if (transitionTime > 0 && transitionTime < 130) {  //Sets animation speed based on receieved value
-      FastLED.delay(1000 / transitionTime);
+    if (animationSpeed > 0 && animationSpeed < 130) {  //Sets animation speed based on receieved value
+      FastLED.delay(1000 / animationSpeed);
     }
   }
 }
@@ -412,13 +443,14 @@ String SendHTML(){
   page += "<h1 class=\"mt-5\">VUME</h1>";
   page += "<p class=\"text-left\" id=\"LED_Status\" style=\"margin: 0em\">LED Status: OFF</p>";
   page += "<p class=\"text-left\" id=\"LED_Color\" style=\"margin: 0em\">Color: </p>";
-  page += "<p class=\"text-left\" id=\"LED_Mode\">Mode: OFF</p>";
+  page += "<p class=\"text-left\" id=\"LED_Mode\">Mode: Solid</p>";
   page += "<a href=\"#\" id=\"Power\" class=\"h6 h-10 btn btn lg btn-secondary fw-bold border-white bg-white text-dark\">ON/OFF</a>";
   page += "<input type=\"color\" style=\"margin-top: 1em; margin-bottom: 1em\" class=\"form-control form-control-md\" id=\"rgb2\" value=\"#563d7c\" title=\"Choose your color\">";
   page += "<a href=\"#\" class=\"h6 btn btn-lg btn-secondary fw-bold border-white bg-white dropdown-toggle text-dark\" id=\"Mode_Select\" data-toggle=\"dropdown\" aria-haspopup=\"true\" aria-expanded=\"false\">Mode Select</a>";
   page += "<div class=\"h6 h-10 dropdown-menu\" aria-labelledby=\"dropdownMenuButton\">";
-  page += "<a href=\"#\" class=\"h6 dropdown-item\">Solid</a>";
-  page += "<a href=\"#\" class=\"h6 dropdown-item\">VU Meter</a></div>";
+  page += "<a href=\"#\" class=\"h6 dropdown-item\">Noise</a>";
+  page += "<a href=\"#\" class=\"h6 dropdown-item\">Rainbow</a>";
+  page += "<a href=\"#\" class=\"h6 dropdown-item\">CandyCane</a></div>";
   page += "<label for=\"Speed\" class=\"h6 text-left\">Speed: </label>";
   page += "<input type=\"range\" class=\"h6\" id=\"Speed\" min=\"5\" max=\"100\" value=\"75\" step=\"5\">";
   page += "<label for=\"Brightness\" class=\"h6 text-left\">Brightness: </label>";
@@ -428,11 +460,11 @@ String SendHTML(){
   page += "<script src=\"https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.7/umd/popper.min.js\" integrity=\"sha384-UO2eT0CpHqdSJQ6hJty5KVphtPhzWj9WO1clHTMGa3JDZwrnQq4sF86dIHNDz0W1\" crossorigin=\"anonymous\"></script>";
   page += "<script src=\"https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/js/bootstrap.min.js\" integrity=\"sha384-JjSmVgyd0p3pXB1rRibZUAYoIIy6OrQ6VrjIEaFf/nJGzIxFDsf4x0xIM+B07jRM\" crossorigin=\"anonymous\"></script></body></hmml>";
 
-  page += "<script>$(\"#Power\").click(function(){if($(\"#LED_Status\").text() == \"LED Status: OFF\"){$(\"#LED_Status\").text(\"LED Status: ON\");$(\"#LED_Mode\").text(\"Mode: Solid\");}else{$(\"#LED_Status\").text(\"LED Status: OFF\");$(\"#LED_Mode\").text(\"Mode: OFF\");}});</script>";
+  page += "<script>$(\"#Power\").click(function(){if($(\"#LED_Status\").text() == \"LED Status: OFF\"){$(\"#LED_Status\").text(\"LED Status: ON\");$.post(\"\\Power\", { Status: \"ON\", Brightness: $(\"#Brightness\").val(), Speed: $(\"#Speed\").val()});}else{$(\"#LED_Status\").text(\"LED Status: OFF\");$.post(\"\\Power\", { Status: \"OFF\"});}});</script>";
   page += "<script>$(\"#Speed\").on(\"change\", function() {$(\"label:first\").text(\"Speed: \" + this.value);});</script>";
   page += "<script>$(\"#Brightness\").on(\"change\", function() {$(\"label:last\").text(\"Brightness: \" + this.value);});</script>";
-  page += "<script>$(\"#rgb2\").on(\"change\", function(){$(\"#LED_Color\").text(\"Color: \" + this.value);$.post(\"\\SetColor\", this.value);});</script>";
-  page += "<script>$(\".dropdown-item\").click(function(){$(\"#LED_Mode\").text(\"Mode: \" + this.text);});</script></body></html>";
+  page += "<script>$(\"#rgb2\").on(\"change\", function(){$(\"#LED_Color\").text(\"Color: \" + this.value);$(\"#LED_Mode\").text(\"Mode: Solid\");$.post(\"\\SetColor\", {Color: this.value, Brightness: $(\"#Brightness\").val()});});</script>";
+  page += "<script>$(\".dropdown-item\").click(function(){$(\"#LED_Mode\").text(\"Mode: \" + this.text);$.post(\"\\SetMode\", {Mode: this.text, Brightness: $(\"#Brightness\").val(), Speed: $(\"#Speed\").val()} );});</script></body></html>";
 
   return page;
 }

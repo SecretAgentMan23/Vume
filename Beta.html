@@ -22,7 +22,7 @@
 
       <p class="text-left" id="LED_Status" style="margin: 0em">LED Status: OFF</p>
       <p class="text-left" id="LED_Color" style="margin: 0em">Color: </p>
-      <p class="text-left" id="LED_Mode">Mode: OFF</p>
+      <p class="text-left" id="LED_Mode">Mode: Solid</p>
 
       <a href="#" id="Power" class="h6 h-10 btn btn lg btn-secondary fw-bold border-white bg-white text-dark">ON/OFF</a>
 
@@ -35,8 +35,9 @@
 
       <a href="#" class="h6 btn btn-lg btn-secondary fw-bold border-white bg-white dropdown-toggle text-dark" id="Mode_Select" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">Mode Select</a>
       <div class="h6 h-10 dropdown-menu" aria-labelledby="dropdownMenuButton">
-        <a href="#" class="h6 dropdown-item">Solid</a>
-        <a href="#" class="h6 dropdown-item">VU Meter</a>
+        <a href="#" class="h6 dropdown-item">Noise</a>
+        <a href="#" class="h6 dropdown-item">Rainbow</a>
+        <a href="#" class="h6 dropdown-item">CandyCane</a>
       </div>
 
       <label for="Speed" class="h6 text-left">Speed: </label>
@@ -55,11 +56,13 @@
     $("#Power").click(function(){
       if($("#LED_Status").text() == "LED Status: OFF"){
         $("#LED_Status").text("LED Status: ON");
-        $("#LED_Mode").text("Mode: Solid");
+        // $("#LED_Mode").text("Mode: Solid");
+        $.post("\Power", { Status: "ON", Brightness: $("#Brightness").val(), Speed: $("#Speed").val()});
       }
       else{
         $("#LED_Status").text("LED Status: OFF");
-        $("#LED_Mode").text("Mode: OFF");
+        // $("#LED_Mode").text("Mode: OFF");
+        $.post("\Power", { Status: "OFF"});
       }
     });
     </script>
@@ -79,13 +82,15 @@
     <script>
     $("#rgb2").on("change", function(){
       $("#LED_Color").text("Color: " + this.value);
-      $.post("\SetColor", this.value);
+      $("#LED_Mode").text("Mode: Solid");
+      $.post("\SetColor", {Color: this.value, Brightness: $("#Brightness").val()});
     });
     </script>
 
     <script>
     $(".dropdown-item").click(function(){
       $("#LED_Mode").text("Mode: " + this.text);
+      $.post("\SetMode", {Mode: this.text, Brightness: $("#Brightness").val(), Speed: $("#Speed").val()} );
     });
     </script>
     <!--
